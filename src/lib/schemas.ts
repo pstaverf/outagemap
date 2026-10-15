@@ -1,0 +1,14 @@
+import { z } from 'zod';
+export const categories = { POWER: 'Электричество', WATER: 'Вода', HEATING: 'Отопление', INTERNET: 'Интернет', ROAD: 'Дороги', LIGHTING: 'Освещение', WASTE: 'Мусор', OTHER: 'Другое' } as const;
+export const statuses = { OPEN: 'Открыта', CONFIRMED: 'Подтверждена', RESOLVED: 'Решена', REJECTED: 'Отклонена' } as const;
+const text = (min: number, max: number) => z.string().trim().min(min).max(max).refine(v => !/[<>\u0000-\u0008]/u.test(v), 'Недопустимые символы');
+export const issueSchema = z.object({ title: text(5, 120), description: text(15, 3000), category: z.enum(Object.keys(categories) as [keyof typeof categories, ...(keyof typeof categories)[]]), lat: z.number().min(-85).max(85), lng: z.number().min(-180).max(180), city: text(2, 100), region: text(0, 100), address: text(0, 250) });
+export const querySchema = z.object({ west: z.coerce.number().min(-180).max(180).default(44), east: z.coerce.number().min(-180).max(180).default(88), south: z.coerce.number().min(-85).max(85).default(40), north: z.coerce.number().min(-85).max(85).default(57), category: issueSchema.shape.category.optional(), status: z.enum(['OPEN', 'CONFIRMED', 'RESOLVED', 'REJECTED']).optional(), q: z.string().max(120).default(''), cursor: z.string().max(100).optional() });
+export const reactionSchema = z.object({ type: z.enum(['AFFECTED', 'NOT_AFFECTED']).nullable() });
+export const reviewSchema = z.object({ locationKey: text(2, 100), rating: z.number().int().min(1).max(5), text: text(10, 2000) });
+export const reportSchema = z.object({ reason: text(10, 1000) });
+export const moderationSchema = z.object({ status: z.enum(['RESOLVED', 'REJECTED']), reason: text(10, 1000) });
+export type IssueInput = z.infer<typeof issueSchema>;
+export const issueViewSchema = issueSchema.extend({ id: z.string(), status: z.enum(['OPEN', 'CONFIRMED', 'RESOLVED', 'REJECTED']), createdAt: z.string(), affected: z.number(), notAffected: z.number(), authorId: z.string() });
+export type IssueView = z.infer<typeof issueViewSchema>;
+export const listSchema = z.object({ items: z.array(issueViewSchema), nextCursor: z.string().nullable() });
