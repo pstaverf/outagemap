@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  engineType = "client"
 }
 datasource db {
   provider = "postgresql"
@@ -44,6 +45,7 @@ model User {
   reviews Review[]
   reports Report[]
   audits AuditLog[]
+  ownedMedia IssueMedia[]
 }
 model Account {
   id String @id @default(cuid())
@@ -90,18 +92,25 @@ model Issue {
   resolvedAt DateTime?
   authorId String
   author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  affectedCount Int @default(0)
+  notAffectedCount Int @default(0)
   media IssueMedia[]
   reactions Reaction[]
   reports Report[]
   @@index([lat, lng])
   @@index([status, category, createdAt, id])
   @@index([city, createdAt])
+  @@index([affectedCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
 }
 model IssueMedia {
   id String @id @default(cuid())
   key String @unique
-  issueId String
-  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  issueId String?
+  issue Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  ownerId String
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([ownerId, createdAt])
 }
 model Reaction {
   userId String
@@ -120,7 +129,9 @@ model Review {
   day DateTime @db.Date
   createdAt DateTime @default(now())
   authorId String
+  hidden Boolean @default(false)
   author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  reports Report[]
   @@unique([authorId, locationKey, day])
   @@index([locationKey, createdAt])
 }
@@ -130,15 +141,18 @@ model Report {
   handled Boolean @default(false)
   createdAt DateTime @default(now())
   authorId String
-  issueId String
+  issueId String?
+  reviewId String?
   author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  issue Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  review Review? @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  @@index([handled, createdAt])
 }
 model AuditLog {
   id String @id @default(cuid())
-  actorId String
+  actorId String?
   action String
   targetId String
   createdAt DateTime @default(now())
-  actor User @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
 }

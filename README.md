@@ -1,21 +1,24 @@
 # OutageMap
 
-Initial implementation of a Russian-language, map-first civic issue tracker for Kazakhstan and Russia. This is an incomplete foundation, not a production-ready implementation of the full specification.
+Карта городских проблем Казахстана и России. Next.js 15, React 19, strict TypeScript, PostgreSQL/Prisma, Redis, MapLibre, Auth.js, S3, next-intl.
 
-## Architecture
+## Структура
 
-- `prisma/schema.prisma`: PostgreSQL data model and initial SQL migration
-- `src/lib`: shared Zod schemas, typed client requests, map-provider configuration
-- `src/server`: authentication, database access, issue business rules, Redis rate limits, HTTP error envelopes
-- `src/app/api`: issue search/creation, reactions, reports, moderation, reviews, account export/deletion, geocoding and health
-- `src/components`: responsive map, list, filters, accessible Radix dialogs and validated creation form
-- `src/app`: application shell, issue pages, login, profile and policy pages
+```text
+prisma/                 схема, миграции, явно обозначенный development seed
+src/app/                страницы и HTTP-транспорт
+src/components/         карта, формы, отзывы, профиль, модерация
+src/lib/                общие схемы, геометрия, обработка изображений
+src/server/             данные, бизнес-правила, авторизация, GeoIP, S3
+src/i18n/, messages/    next-intl и каталоги ru/kk
+scripts/                обслуживание, CORS, проверки размещения, тестовая БД
+tests/                  PostgreSQL-интеграция, изображения, Playwright
+deployment/             пример доверенного reverse proxy
+```
 
-MapLibre is dynamically imported. Issues load by debounced bounding box, with clustering and cursor pagination. Reaction changes lock the issue row in a transaction; the compound primary key prevents duplicate user reactions. Three affected reactions confirm an issue. Mutations verify session and account status on the server, and API mutations enforce same-origin requests. Account deletion cascades through owned content.
+## Локальный запуск
 
-## Local setup
-
-Requires Node.js 22+, Docker Compose, and network access to npm and Prisma engine downloads.
+Требуются Node.js 22+, Docker Compose и доступ к npm/Prisma downloads.
 
 ```sh
 npm ci
@@ -23,43 +26,101 @@ cp .env.example .env
 openssl rand -base64 32
 ```
 
-Set `AUTH_SECRET` to the generated value. Configure Google OAuth credentials for Google login; local email login uses Mailpit. Register the callback `/api/auth/callback/google` in the OAuth provider.
+Запишите результат в `AUTH_SECRET`. Для Google задайте OAuth credentials и зарегистрируйте `/api/auth/callback/google`. Для локального входа по почте используется Mailpit.
 
 ```sh
 docker compose up -d
-npx prisma generate
+npm run db:generate
 npm run db:migrate
 npm run dev
 ```
 
-Open http://localhost:3000 and http://localhost:8025 for local email. Health endpoint: `/api/health` checks PostgreSQL and Redis. No fabricated outage reports are inserted into the database.
+Приложение: http://localhost:3000. Почта: http://localhost:8025. MinIO: http://localhost:9001. Compose создаёт закрытый bucket и lifecycle для удаления исходных загрузок через сутки. Для MinIO CORS задаётся `MINIO_API_CORS_ALLOW_ORIGIN`; для R2/S3 используйте `npm run storage:cors` или настройки оператора. `S3_PUBLIC_ENDPOINT` должен быть доступен браузеру, а не только контейнеру.
+
+Карта по умолчанию использует OpenFreeMap. Спутниковый URL и обязательную атрибуцию задайте в `NEXT_PUBLIC_SATELLITE_URL` и `NEXT_PUBLIC_SATELLITE_ATTRIBUTION`. Допустимы лицензированные MapTiler/Mapbox raster tile URLs. Гибрид сохраняет векторные подписи поверх растра. 3D-слой использует `NEXT_PUBLIC_BUILDING_SOURCE` и `NEXT_PUBLIC_BUILDING_SOURCE_LAYER`; эти имена должны соответствовать векторному стилю. Изображения Google/Яндекса не используются.
 
 ```sh
-npm run lint
-npm run typecheck
+ALLOW_DEMO_SEED=true npm run db:seed
+```
+
+Seed разрешён только вне production. Все четыре записи явно названы учебными; реальные отключения не выдумываются и не выдаются за сообщения жителей.
+
+## Реализованные сценарии
+
+- Карта с кластерами, выборкой по bbox, дебаунсом, глубокой ссылкой, восстановлением положения, схемой/спутником/гибридом, 3D-зданиями от z15, подсветкой найденного контура и просмотром проблем у здания.
+- Город по локальным GeoLite2 City/ASN, подписанный кэш на 24 часа, пользовательский выбор на год, обзор страны при неопределённости. Геолокация устройства и обратный геокодинг. Nominatim с Redis-кэшем и глобальным лимитом 1 запрос/секунду.
+- Создание сообщения с проверкой дублей в радиусе 150 м, пятью фотографиями, клиентским сжатием, подписанной загрузкой и обязательным серверным декодированием/повторным кодированием без EXIF. MIME проверяется по декодированному формату, SVG и анимация не допускаются.
+- Смена/снятие реакции с оптимистичным интерфейсом, уникальной парой user/issue, блокировкой строки и согласованными счётчиками. Три подтверждения меняют статус; автор видит предложение закрыть проблему при росте сообщений о работающей услуге.
+- Отзывы и средняя оценка, ограничение одного отзыва на пользователя/локацию/сутки UTC, жалобы на отзывы и проблемы.
+- Профиль: редактирование и удаление своего контента, имя, экспорт JSON и удаление аккаунта с удалением фото и каскадной очисткой. При удалении реакций пересчитываются счётчики других проблем.
+- Модерация: очередь жалоб, скрытие контента, закрытие дубликатов, блокировка с отзывом сессий, аудит. Обычный пользователь не может изменить чужой контент или обработать жалобу.
+- Google и magic link на 15 минут с хешированным токеном Auth.js; объединение Google-аккаунта только после проверки `email_verified`. Сессия на сутки или 30 дней. Возобновление создания и реакции после входа.
+- Страницы проблем с метаданными/OG, sitemap, robots, страницы политик с реквизитами из окружения.
+- Redis rate limits, same-origin mutation checks и CSRF Auth.js, nonce-based CSP для скриптов, безопасные заголовки. Inline styles разрешены для MapLibre; inline scripts без nonce не разрешены.
+- Мобильная шторка с жестом и клавиатурной кнопкой; локальный Inter Variable с кириллицей. Основной экран, категории и статусы переключаются ru/kk. Формы, правовые страницы и часть служебных сообщений пока остаются русскоязычными.
+- Ограниченный кэш картографических тайлов в браузере; API с персональными данными не кэшируется service worker.
+
+## GeoIP и доверие прокси
+
+Приложение не доверяет произвольному `X-Forwarded-For`. Заголовок принимается только вместе с `X-OutageMap-Proxy-Secret`, совпадающим с `TRUSTED_PROXY_SECRET`. Прокси должен ПЕРЕЗАПИСЫВАТЬ оба заголовка, а не дополнять пользовательскую цепочку. Пример в `deployment/nginx.conf.template`. Не публикуйте этот секрет и не записывайте IP в access/error logs прокси.
+
+Задайте локальные пути `GEOLITE_CITY_PATH` и `GEOLITE_ASN_PATH`. Базы загружает оператор по лицензии MaxMind, в Git они не включаются. ASN эвристика и `GEO_DENIED_ASNS` отсекают известные хостинги; бесплатная GeoLite2 не гарантирует обнаружение всех VPN. При отсутствии обеих баз сервис безопасно переходит к обзору Казахстана, не обращаясь к внешним GeoIP API.
+
+## Production
+
+```sh
+npm run verify:deployment
+npm run db:generate
+npm run db:migrate
 npm run build
 npm start
 ```
 
-Production requires HTTPS, a strong secret, working SMTP, provider credentials, and appropriate database placement. The Compose configuration is for local development only, not production deployment. Never enable `AUTH_TRUST_HOST` behind an untrusted host-header forwarding proxy.
+Или после миграций: `docker compose --profile app up --build -d`. Публичные переменные карты передаются при сборке контейнера. Запускайте за HTTPS reverse proxy, ограничьте JSON тела запросов 64 КБ. Фотографии идут напрямую в S3 по ограниченным signed POST, не через Next.js.
 
-## Current limitations and release blockers
+`/api/health` проверяет PostgreSQL и Redis. Standalone Next.js получает SIGTERM от контейнера, Compose предоставляет 30 секунд на завершение. Необходимы сильные секреты, действующий SMTP, OAuth, приватный S3 bucket, CORS на конкретный origin, lifecycle исходников и локальные базы GeoLite2.
 
-- S3 image upload, image processing, EXIF removal and signed URLs are not implemented.
-- Local GeoLite2/IP lookup and trusted-proxy configuration are not implemented; the initial location defaults to Almaty and can be selected manually.
-- Hybrid labels and 3D building interaction are not implemented. Satellite works only when a licensed tile URL and attribution are configured. Hybrid currently uses the satellite raster style without labels.
-- Nearby duplicate detection, reaction removal in the UI, closed-issue suggestions, review UI, moderator dashboard, user blocking UI, and full profile management remain unimplemented.
-- The login return flow resumes issue creation only; it does not replay a reaction. There is no remember-me option or verified-email account-linking flow.
-- Complete Kazakhstan/Russia data-residency routing, legal/operator details, strict nonce-based CSP, IP rate limiting, Kazakh translation, bundled Cyrillic font, production shutdown handling, tile caching and realistic development seed remain unimplemented.
-- The saved map position is written but not restored. City persistence currently uses local storage rather than a cookie. Direct links depend on the issue being loaded in the current bounding box.
-- Issue list counts describe loaded records, not total matching records. Filtering by period/region and sorting by confirmation count are not implemented.
-- Audit retention on account deletion needs a separate legal/data-retention decision.
-- Dependency audit reports unresolved vulnerabilities, including Auth.js. Do not expose this build publicly until dependencies and security controls are reviewed.
+Запускайте `npm run maintenance` по расписанию не реже раза в сутки: удаляются истёкшие сессии/токены, неиспользованные фото и устаревший аудит. `AUDIT_RETENTION_DAYS` по умолчанию 365. Очистка фотографий транзакционно блокирует выбранные записи, чтобы не удалить их одновременно с прикреплением.
 
-## Validation in the Arena environment
+### Персональные данные
 
-`npm run lint` and `npm run typecheck` pass. TypeScript uses `strict`, unused-code checks and `skipLibCheck` because upstream dependency declarations contain incompatible optional-provider types.
+`DATA_JURISDICTION` и `DATA_RESIDENCY_ATTESTED` — декларация оператора, не доказательство географического размещения. Для Казахстана и России необходимо развернуть отдельные экземпляры с БД, Redis, S3, почтой, логами и резервными копиями в нужной юрисдикции. Ссылки `RU_PUBLIC_URL`/`KZ_PUBLIC_URL` можно показать в политиках. Автоматического определения гражданства и трансграничной репликации нет. Выбор города на карте не меняет место хранения аккаунта.
 
-Next.js production compilation, lint, type checks, and page generation completed with build-only engine path overrides. However, the environment blocks `binaries.prisma.sh`; native Prisma engines could not be downloaded. The override is not a working engine and is not part of the project configuration. Runtime database operations, migration execution, authentication, Redis workflows, external map/geocoding requests and browser end-to-end behavior have not been verified. Build logs emitted Prisma initialization errors with that override; the successful build exit code must not be interpreted as successful database validation.
+Заполните `OPERATOR_NAME`/`OPERATOR_CONTACT`, подтвердите законные основания обработки, порядок согласий, перечень обработчиков и срок удаления резервных копий. Код и тексты политик сами по себе не подтверждают соблюдение законодательства. До проверки юристом и оператором публичный запуск не допускается.
 
-The migration is supplied as SQL but has not been executed against PostgreSQL here. No production-readiness or legal-compliance claim is made.
+## Проверки
+
+```sh
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm audit --omit=dev
+```
+
+`npm test` запускает настоящий временный PostgreSQL из dev-only npm-пакета `embedded-postgres`, выполняет обе миграции, проверяет конкурентные реакции, уникальность отзывов, права на прикрепление медиа, каскады и сохранение обезличенного аудита. Также проверяются GeoIP-доверие, подпись/валидация местности, координаты и удаление метаданных из фото.
+
+Для Playwright нужен Chromium и изолированная тестовая инфраструктура:
+
+```sh
+npx playwright install --with-deps chromium
+DATABASE_URL=postgresql://outagemap:outagemap@localhost:15432/outagemap npx tsx scripts/test-services.ts
+```
+
+Во втором терминале запустите отдельный Redis на 6379. В третьем:
+
+```sh
+DATABASE_URL=postgresql://outagemap:outagemap@localhost:15432/outagemap REDIS_URL=redis://localhost:6379 AUTH_SECRET=integration-only-secret AUTH_TRUST_HOST=true AUTH_URL=http://localhost:3000 npm run dev
+```
+
+В четвёртом: `npm run test:e2e`. В тестовой БД создаются только тестовые учётные записи и сессии, недоступные в обычном запуске приложения. Не используйте эту БД как production. Перед повторным запуском обнулите только тестовый Redis или дождитесь TTL лимитов. CI воспроизводит этот сценарий.
+
+### Результаты в Arena
+
+- ESLint и strict TypeScript проходят.
+- Проверки на реальном PostgreSQL и обработку изображений проходят.
+- Production build проходит без подмены query engine: приложение использует `@prisma/adapter-pg` и Prisma client engine.
+- В Chromium прошли 8 desktop/mobile сценариев с реальными PostgreSQL и Redis.
+- `npm audit --omit=dev`: 0 уязвимостей. Полный аудит ещё сообщает 8 high в инструментах разработки (`braces`/цепочка eslint и `deepmerge-ts`/Prisma CLI); обновление/оценка этих цепочек остаётся задачей сопровождения.
+- В среде заблокированы картографические/geocoding-хосты и `binaries.prisma.sh`. Генерация клиента здесь выполнялась с временными путями движков только для CLI; runtime Prisma больше не зависит от них. Фактическая загрузка внешних тайлов, GeoLite2 с реальными базами, OAuth/SMTP у production-провайдеров, S3/R2/MinIO-интеграция и Compose целиком здесь не подтверждены.
+- LCP 2,5 секунды не измерен на целевом мобильном устройстве. Полного перевода всех форм на казахский пока нет. Это не следует скрывать за успешным build или тестами.
