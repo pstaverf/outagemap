@@ -1,0 +1,158 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "client"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum Role {
+  USER
+  MODERATOR
+}
+enum Category {
+  POWER
+  WATER
+  HEATING
+  INTERNET
+  ROAD
+  LIGHTING
+  WASTE
+  OTHER
+}
+enum Status {
+  OPEN
+  CONFIRMED
+  RESOLVED
+  REJECTED
+}
+enum ReactionType {
+  AFFECTED
+  NOT_AFFECTED
+}
+model User {
+  id String @id @default(cuid())
+  name String?
+  email String? @unique
+  emailVerified DateTime?
+  image String?
+  role Role @default(USER)
+  blocked Boolean @default(false)
+  accounts Account[]
+  sessions Session[]
+  issues Issue[]
+  reactions Reaction[]
+  reviews Review[]
+  reports Report[]
+  audits AuditLog[]
+  ownedMedia IssueMedia[]
+}
+model Account {
+  id String @id @default(cuid())
+  userId String
+  type String
+  provider String
+  providerAccountId String
+  refresh_token String?
+  access_token String?
+  expires_at Int?
+  token_type String?
+  scope String?
+  id_token String?
+  session_state String?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerAccountId])
+}
+model Session {
+  id String @id @default(cuid())
+  sessionToken String @unique
+  userId String
+  expires DateTime
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+model VerificationToken {
+  identifier String
+  token String @unique
+  expires DateTime
+  @@unique([identifier, token])
+}
+model Issue {
+  id String @id @default(cuid())
+  title String
+  description String
+  category Category
+  status Status @default(OPEN)
+  lat Float
+  lng Float
+  region String
+  city String
+  address String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  resolvedAt DateTime?
+  authorId String
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  affectedCount Int @default(0)
+  notAffectedCount Int @default(0)
+  media IssueMedia[]
+  reactions Reaction[]
+  reports Report[]
+  @@index([lat, lng])
+  @@index([status, category, createdAt, id])
+  @@index([city, createdAt])
+  @@index([affectedCount(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
+}
+model IssueMedia {
+  id String @id @default(cuid())
+  key String @unique
+  issueId String?
+  issue Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  ownerId String
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([ownerId, createdAt])
+}
+model Reaction {
+  userId String
+  issueId String
+  type ReactionType
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  @@id([userId, issueId])
+  @@index([issueId, type])
+}
+model Review {
+  id String @id @default(cuid())
+  locationKey String
+  rating Int
+  text String
+  day DateTime @db.Date
+  createdAt DateTime @default(now())
+  authorId String
+  hidden Boolean @default(false)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  reports Report[]
+  @@unique([authorId, locationKey, day])
+  @@index([locationKey, createdAt])
+}
+model Report {
+  id String @id @default(cuid())
+  reason String
+  handled Boolean @default(false)
+  createdAt DateTime @default(now())
+  authorId String
+  issueId String?
+  reviewId String?
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  issue Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  review Review? @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  @@index([handled, createdAt])
+}
+model AuditLog {
+  id String @id @default(cuid())
+  actorId String?
+  action String
+  targetId String
+  createdAt DateTime @default(now())
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+}

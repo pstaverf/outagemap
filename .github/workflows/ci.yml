@@ -1,0 +1,46 @@
+name: Quality
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      AUTH_SECRET: integration-only-secret-never-use-for-production
+      AUTH_URL: http://localhost:3000
+      AUTH_TRUST_HOST: 'true'
+      DATABASE_URL: postgresql://outagemap:outagemap@localhost:15432/outagemap
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev
+      - run: npx playwright install --with-deps chromium
+      - run: |
+          npx tsx scripts/test-services.ts > /tmp/test-db.log 2>&1 &
+          npm run dev > /tmp/app.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail http://localhost:3000/api/health; then break; fi
+            sleep 2
+          done
+          npm run test:e2e
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: test-results
+          path: test-results
